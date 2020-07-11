@@ -1,0 +1,38 @@
+[package]
+name = "async-tls-lite"
+version = "0.1.0"
+authors = ["vkill <vkill.net@gmail.com>"]
+edition = "2018"
+description = "Asynchronous TLS/SSL streams using Rustls."
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/vkill/async-tls-lite"
+homepage = "https://github.com/vkill/async-tls-lite"
+documentation = "https://docs.rs/async-tls-lite"
+keywords = ["TLS"]
+categories = ["asynchronous", "cryptography", "network-programming"]
+readme = "README.md"
+
+[features]
+default = ["acceptor", "connector"]
+acceptor = []
+connector = ["webpki", "webpki-roots"]
+
+[dependencies]
+rustls = { version = "0.18", default-features = false, features = [] }
+futures-util = { version = "0.3", default-features = false, features = ["io"] }
+futures-io-traits-sync-wrapper = { version = "0.1", default-features = false, features = [] }
+
+webpki = { version = "0.21", default-features = false, features = [], optional = true }
+webpki-roots = { version = "0.20", default-features = false, features = [], optional = true }
+
+[dev-dependencies]
+futures-executor = { version = "0.3", default-features = false, features = ["default", "thread-pool"] }
+async-io = { version = "0.1", default-features = false, features = [] }
+
+webpki = { version = "0.21", default-features = false, features = [] }
+webpki-roots = { version = "0.20", default-features = false, features = [] }
+
+[workspace]
+members = [
+    "demos/smol",
+]
