@@ -2,6 +2,7 @@ use std::io;
 use std::net::TcpStream;
 use std::str;
 use std::thread;
+use std::time::Duration;
 
 use futures::future;
 use futures::{AsyncReadExt, AsyncWriteExt};
@@ -23,8 +24,12 @@ async fn run() -> io::Result<()> {
         let (sender, receiver) = async_channel::unbounded();
         receivers.push(receiver);
 
-        let task: Task<io::Result<()>> = Task::spawn(async move {
+        let task = Task::<io::Result<()>>::spawn(async move {
             let tcp_stream = Async::<TcpStream>::connect("github.com:443").await?;
+            let tcp_stream = tcp_stream.into_inner()?;
+            tcp_stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+            tcp_stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+            let tcp_stream = Async::new(tcp_stream)?;
 
             let connector = TlsConnector::default();
 
@@ -47,12 +52,16 @@ accept: */*
 
             println!("{} {:?}", i, str::from_utf8(&buf));
 
-            sender.send(format!("{} done", i)).await.unwrap();
-
             Ok(())
         });
 
-        task.expect("").detach();
+        Task::spawn(async move {
+            task.await
+                .unwrap_or_else(|err| eprintln!("task {} failed, err: {}", i, err));
+
+            sender.send(format!("{} done", i)).await.unwrap()
+        })
+        .detach();
     }
 
     for receiver in receivers {

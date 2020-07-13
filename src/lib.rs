@@ -1,6 +1,5 @@
 use std::future::Future;
 use std::io::{self, Read, Write};
-use std::mem;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -11,12 +10,12 @@ use rustls::{Session, Stream};
 #[cfg(feature = "acceptor")]
 mod acceptor;
 #[cfg(feature = "acceptor")]
-pub use acceptor::{Accept, TlsAcceptor};
+pub use acceptor::TlsAcceptor;
 
 #[cfg(feature = "connector")]
 mod connector;
 #[cfg(feature = "connector")]
-pub use connector::{Connect, TlsConnector};
+pub use connector::TlsConnector;
 
 pub mod prelude {
     pub use rustls::{
@@ -30,27 +29,12 @@ pub mod prelude {
     pub use webpki_roots::TLS_SERVER_ROOTS;
 }
 
-#[derive(PartialEq, Eq)]
-enum State {
-    Pending,
-    HandshakeCompleted,
-}
-
 pub struct TlsStream<S, IO> {
     session: S,
     io: Box<IO>,
-    state: State,
 }
 
 impl<S, IO> TlsStream<S, IO> {
-    fn new(session: S, io: IO) -> Self {
-        Self {
-            session,
-            io: Box::new(io),
-            state: State::Pending,
-        }
-    }
-
     pub fn get_mut(&mut self) -> (&mut S, &mut IO) {
         (&mut self.session, self.io.as_mut())
     }
@@ -64,16 +48,17 @@ impl<S, IO> TlsStream<S, IO> {
     }
 }
 
-pub enum MidHandshake<S, IO> {
-    Handshaking(TlsStream<S, IO>),
-    End,
+pub async fn handshake<S, IO>(session: S, io: IO) -> io::Result<TlsStream<S, IO>>
+where
+    S: Session + Unpin,
+    IO: AsyncRead + AsyncWrite + Unpin,
+{
+    Handshake(Some((session, io))).await
 }
 
-pub fn handshake<S, IO>(session: S, io: IO) -> MidHandshake<S, IO> {
-    MidHandshake::Handshaking(TlsStream::new(session, io))
-}
+struct Handshake<S, IO>(Option<(S, IO)>);
 
-impl<S, IO> Future for MidHandshake<S, IO>
+impl<S, IO> Future for Handshake<S, IO>
 where
     S: Session + Unpin,
     IO: AsyncRead + AsyncWrite + Unpin,
@@ -83,24 +68,21 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let this = self.get_mut();
 
-        if let MidHandshake::Handshaking(tls_stream) = this {
-            let mut io = AsyncRWSyncWrapper::new(&mut tls_stream.io, cx);
+        let (mut session, mut stream) = this.0.take().expect("never");
 
-            match tls_stream.session.complete_io(&mut io) {
-                Ok(_) => {}
-                Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => return Poll::Pending,
-                Err(err) => return Poll::Ready(Err(err)),
+        let mut io = AsyncRWSyncWrapper::new(&mut stream, cx);
+
+        match session.complete_io(&mut io) {
+            Ok(_) => Poll::Ready(Ok(TlsStream {
+                session,
+                io: Box::new(stream),
+            })),
+            Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => {
+                this.0 = Some((session, stream));
+
+                Poll::Pending
             }
-        }
-
-        match mem::replace(this, MidHandshake::End) {
-            MidHandshake::Handshaking(mut tls_stream) => {
-                *this = MidHandshake::End;
-
-                tls_stream.state = State::HandshakeCompleted;
-                Poll::Ready(Ok(tls_stream))
-            }
-            MidHandshake::End => panic!(),
+            Err(err) => Poll::Ready(Err(err)),
         }
     }
 }
@@ -116,8 +98,6 @@ where
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
         let this = self.get_mut();
-
-        debug_assert!(this.state == State::HandshakeCompleted);
 
         let mut io = AsyncRWSyncWrapper::new(&mut this.io, cx);
 
@@ -138,8 +118,6 @@ where
 {
     fn poll_write(self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>> {
         let this = self.get_mut();
-
-        debug_assert!(this.state == State::HandshakeCompleted);
 
         let mut io = AsyncRWSyncWrapper::new(&mut this.io, cx);
 

@@ -45,7 +45,7 @@ async fn run() -> io::Result<()> {
     let acceptor = TlsAcceptor::from(Arc::new(server_config));
 
     let port: u16 = env::var("LISTEN_PORT")
-        .unwrap_or("443".to_owned())
+        .unwrap_or_else(|_| "443".to_owned())
         .parse()
         .unwrap();
     let listener = Async::<TcpListener>::bind(format!("127.0.0.1:{}", port))?;
@@ -54,7 +54,7 @@ async fn run() -> io::Result<()> {
     while let Some(tcp_stream) = incoming.next().await {
         let acceptor = acceptor.clone();
 
-        let task: Task<io::Result<()>> = Task::spawn(async move {
+        let task = Task::<io::Result<()>>::spawn(async move {
             let tcp_stream = tcp_stream?;
             println!("Accepted client: {}", tcp_stream.get_ref().peer_addr()?);
 
@@ -76,7 +76,11 @@ async fn run() -> io::Result<()> {
             Ok(())
         });
 
-        task.expect("").detach();
+        Task::spawn(async move {
+            task.await
+                .unwrap_or_else(|err| eprintln!("handle failed, err: {:?}", err));
+        })
+        .detach()
     }
 
     Ok(())

@@ -4,6 +4,8 @@ use std::net::{Shutdown, TcpStream};
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 
 use rustls::{
     internal::pemfile, ClientConfig, ClientSession, NoClientAuth, ServerConfig, ServerSession,
@@ -77,6 +79,8 @@ pub async fn run_sync_server(
 
     tls_stream.write(b"bar")?;
     println!("server tls_stream write bar done");
+
+    thread::sleep(Duration::from_millis(100));
 
     let mut buf = [0; 5];
     let n = tls_stream.read(&mut buf)?;
