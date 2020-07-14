@@ -5,8 +5,10 @@ use std::thread;
 use std::time::Duration;
 
 use futures::future;
+use futures::select;
+use futures::FutureExt;
 use futures::{AsyncReadExt, AsyncWriteExt};
-use smol::{Async, Task};
+use smol::{Async, Task, Timer};
 
 use async_tls_lite::TlsConnector;
 
@@ -25,7 +27,10 @@ async fn run() -> io::Result<()> {
         receivers.push(receiver);
 
         let task = Task::<io::Result<()>>::spawn(async move {
-            let tcp_stream = Async::<TcpStream>::connect("github.com:443").await?;
+            let tcp_stream = select! {
+                ret = Async::<TcpStream>::connect("github.com:443").fuse() => ret,
+                _ = Timer::after(Duration::from_millis(500)).fuse() => Err(io::Error::new(io::ErrorKind::TimedOut, "connect timeout")),
+            }?;
             let tcp_stream = tcp_stream.into_inner()?;
             tcp_stream.set_read_timeout(Some(Duration::from_secs(2)))?;
             tcp_stream.set_write_timeout(Some(Duration::from_secs(2)))?;
