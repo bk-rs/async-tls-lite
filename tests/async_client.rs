@@ -16,7 +16,7 @@ mod inner_helper {
     use futures_util::io::{AsyncReadExt, AsyncWriteExt};
     use rustls::ClientSession;
 
-    use async_tls_lite::handshake;
+    use async_tls_lite::client_handshake;
 
     pub async fn run_async_client(
         client_session: ClientSession,
@@ -25,7 +25,7 @@ mod inner_helper {
     ) -> io::Result<()> {
         let tcp_stream = Async::<TcpStream>::new(tcp_stream)?;
 
-        let mut tls_stream = handshake(client_session, tcp_stream).await?;
+        let mut tls_stream = client_handshake(client_session, tcp_stream).await?;
 
         tls_stream.write(b"foo").await?;
         println!("client tls_stream write foo done");
@@ -34,7 +34,7 @@ mod inner_helper {
         assert_eq!(&buf, b"bar\0\0");
         println!("client tls_stream read bar done");
 
-        let (_, tcp_stream) = tls_stream.get_mut();
+        let tcp_stream = tls_stream.get_mut();
         tcp_stream.get_mut().shutdown(Shutdown::Both)?;
 
         println!("client tls_stream shutdown done");

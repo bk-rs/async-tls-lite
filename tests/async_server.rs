@@ -16,7 +16,7 @@ mod inner_helper {
     use futures_util::io::{AsyncReadExt, AsyncWriteExt};
     use rustls::ServerSession;
 
-    use async_tls_lite::handshake;
+    use async_tls_lite::server_handshake;
 
     pub async fn run_async_server(
         server_session: ServerSession,
@@ -25,7 +25,7 @@ mod inner_helper {
     ) -> io::Result<()> {
         let tcp_stream = Async::<TcpStream>::new(tcp_stream)?;
 
-        let mut tls_stream = handshake(server_session, tcp_stream).await?;
+        let mut tls_stream = server_handshake(server_session, tcp_stream).await?;
 
         let mut buf = [0; 5];
         tls_stream.read(&mut buf).await?;

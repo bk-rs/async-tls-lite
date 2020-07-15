@@ -27,14 +27,13 @@ async fn run() -> io::Result<()> {
         receivers.push(receiver);
 
         let task = Task::<io::Result<()>>::spawn(async move {
-            let tcp_stream = select! {
+            let mut tcp_stream = select! {
                 ret = Async::<TcpStream>::connect("github.com:443").fuse() => ret,
                 _ = Timer::after(Duration::from_millis(500)).fuse() => Err(io::Error::new(io::ErrorKind::TimedOut, "connect timeout")),
             }?;
-            let tcp_stream = tcp_stream.into_inner()?;
-            tcp_stream.set_read_timeout(Some(Duration::from_secs(2)))?;
-            tcp_stream.set_write_timeout(Some(Duration::from_secs(2)))?;
-            let tcp_stream = Async::new(tcp_stream)?;
+            let std_tcp_stream = tcp_stream.get_mut();
+            std_tcp_stream.set_read_timeout(Some(Duration::from_millis(500)))?;
+            std_tcp_stream.set_write_timeout(Some(Duration::from_millis(500)))?;
 
             let connector = TlsConnector::default();
 

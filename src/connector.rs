@@ -7,7 +7,7 @@ use futures_util::io::{AsyncRead, AsyncWrite};
 use rustls::{ClientConfig, ClientSession};
 use webpki::DNSNameRef;
 
-use crate::{handshake, TlsStream};
+use crate::{client_handshake, TlsStream};
 
 #[derive(Clone)]
 pub struct TlsConnector {
@@ -35,13 +35,13 @@ impl TlsConnector {
         Default::default()
     }
 
-    pub async fn connect<IO>(
+    pub async fn connect<S>(
         &self,
         domain: impl AsRef<str>,
-        stream: IO,
-    ) -> io::Result<TlsStream<ClientSession, IO>>
+        stream: S,
+    ) -> io::Result<TlsStream<ClientSession, S>>
     where
-        IO: AsyncRead + AsyncWrite + Unpin,
+        S: AsyncRead + AsyncWrite + Unpin,
     {
         let domain = match DNSNameRef::try_from_ascii_str(domain.as_ref()) {
             Ok(domain) => domain,
@@ -55,6 +55,6 @@ impl TlsConnector {
 
         let session = ClientSession::new(&self.inner, domain);
 
-        handshake(session, stream).await
+        client_handshake(session, stream).await
     }
 }

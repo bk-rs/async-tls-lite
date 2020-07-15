@@ -80,7 +80,7 @@ pub async fn run_sync_server(
     tls_stream.write(b"bar")?;
     println!("server tls_stream write bar done");
 
-    thread::sleep(Duration::from_millis(100));
+    thread::sleep(Duration::from_millis(200));
 
     let mut buf = [0; 5];
     let n = tls_stream.read(&mut buf)?;

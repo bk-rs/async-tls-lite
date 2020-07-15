@@ -6,7 +6,7 @@ use std::sync::Arc;
 use futures_util::io::{AsyncRead, AsyncWrite};
 use rustls::{ServerConfig, ServerSession};
 
-use crate::{handshake, TlsStream};
+use crate::{server_handshake, TlsStream};
 
 #[derive(Clone)]
 pub struct TlsAcceptor {
@@ -20,12 +20,12 @@ impl From<Arc<ServerConfig>> for TlsAcceptor {
 }
 
 impl TlsAcceptor {
-    pub async fn accept<IO>(&self, stream: IO) -> io::Result<TlsStream<ServerSession, IO>>
+    pub async fn accept<S>(&self, stream: S) -> io::Result<TlsStream<ServerSession, S>>
     where
-        IO: AsyncRead + AsyncWrite + Unpin,
+        S: AsyncRead + AsyncWrite + Unpin,
     {
         let session = ServerSession::new(&self.inner);
 
-        handshake(session, stream).await
+        server_handshake(session, stream).await
     }
 }

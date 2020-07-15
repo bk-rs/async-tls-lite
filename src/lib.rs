@@ -5,7 +5,7 @@ use std::task::{Context, Poll};
 
 use futures_io_traits_sync_wrapper::Wrapper as AsyncRWSyncWrapper;
 use futures_util::io::{AsyncRead, AsyncWrite};
-use rustls::{Session, Stream};
+use rustls::{ClientSession, ServerSession, Session, Stream};
 
 #[cfg(feature = "acceptor")]
 mod acceptor;
@@ -29,53 +29,80 @@ pub mod prelude {
     pub use webpki_roots::TLS_SERVER_ROOTS;
 }
 
-pub struct TlsStream<S, IO> {
-    session: S,
-    io: Box<IO>,
+pub struct TlsStream<SESS, S> {
+    inner: TlsStreamInner<SESS, S>,
 }
 
-impl<S, IO> TlsStream<S, IO> {
-    pub fn get_mut(&mut self) -> (&mut S, &mut IO) {
-        (&mut self.session, self.io.as_mut())
+struct TlsStreamInner<SESS, S> {
+    session: SESS,
+    stream: S,
+}
+
+impl<SESS, S> TlsStream<SESS, S> {
+    pub fn get_mut(&mut self) -> &mut S {
+        &mut self.inner.stream
     }
 
-    pub fn get_ref(&self) -> (&S, &IO) {
-        (&self.session, self.io.as_ref())
+    pub fn get_ref(&self) -> &S {
+        &self.inner.stream
     }
 
-    pub fn into_inner(self) -> (S, IO) {
-        (self.session, *self.io)
+    pub fn get_session_mut(&mut self) -> &mut SESS {
+        &mut self.inner.session
+    }
+
+    pub fn get_session_ref(&self) -> &SESS {
+        &self.inner.session
     }
 }
 
-pub async fn handshake<S, IO>(session: S, io: IO) -> io::Result<TlsStream<S, IO>>
+pub async fn client_handshake<S>(
+    session: ClientSession,
+    stream: S,
+) -> io::Result<TlsStream<ClientSession, S>>
 where
-    S: Session + Unpin,
-    IO: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + Unpin,
 {
-    Handshake(Some((session, io))).await
+    handshake(session, stream).await
 }
 
-struct Handshake<S, IO>(Option<(S, IO)>);
-
-impl<S, IO> Future for Handshake<S, IO>
+pub async fn server_handshake<S>(
+    session: ServerSession,
+    stream: S,
+) -> io::Result<TlsStream<ServerSession, S>>
 where
-    S: Session + Unpin,
-    IO: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + Unpin,
 {
-    type Output = io::Result<TlsStream<S, IO>>;
+    handshake(session, stream).await
+}
+
+async fn handshake<SESS, S>(session: SESS, stream: S) -> io::Result<TlsStream<SESS, S>>
+where
+    SESS: Session + Unpin,
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    Handshake(Some((session, stream))).await
+}
+
+struct Handshake<SESS, S>(Option<(SESS, S)>);
+
+impl<SESS, S> Future for Handshake<SESS, S>
+where
+    SESS: Session + Unpin,
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    type Output = io::Result<TlsStream<SESS, S>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let this = self.get_mut();
 
         let (mut session, mut stream) = this.0.take().expect("never");
 
-        let mut io = AsyncRWSyncWrapper::new(&mut stream, cx);
+        let mut sync_stream = AsyncRWSyncWrapper::new(&mut stream, cx);
 
-        match session.complete_io(&mut io) {
+        match session.complete_io(&mut sync_stream) {
             Ok(_) => Poll::Ready(Ok(TlsStream {
-                session,
-                io: Box::new(stream),
+                inner: TlsStreamInner { session, stream },
             })),
             Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => {
                 this.0 = Some((session, stream));
@@ -87,10 +114,10 @@ where
     }
 }
 
-impl<S, IO> AsyncRead for TlsStream<S, IO>
+impl<SESS, S> AsyncRead for TlsStream<SESS, S>
 where
-    S: Session + Unpin,
-    IO: AsyncRead + AsyncWrite + Unpin,
+    SESS: Session + Unpin,
+    S: AsyncRead + AsyncWrite + Unpin,
 {
     fn poll_read(
         self: Pin<&mut Self>,
@@ -99,11 +126,11 @@ where
     ) -> Poll<io::Result<usize>> {
         let this = self.get_mut();
 
-        let mut io = AsyncRWSyncWrapper::new(&mut this.io, cx);
+        let mut sync_stream = AsyncRWSyncWrapper::new(&mut this.inner.stream, cx);
 
-        let mut stream = Stream::new(&mut this.session, &mut io);
+        let mut rustls_stream = Stream::new(&mut this.inner.session, &mut sync_stream);
 
-        match stream.read(buf) {
+        match rustls_stream.read(buf) {
             Ok(n) => Poll::Ready(Ok(n)),
             Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => Poll::Pending,
             Err(err) => Poll::Ready(Err(err)),
@@ -111,19 +138,19 @@ where
     }
 }
 
-impl<S, IO> AsyncWrite for TlsStream<S, IO>
+impl<SESS, S> AsyncWrite for TlsStream<SESS, S>
 where
-    S: Session + Unpin,
-    IO: AsyncRead + AsyncWrite + Unpin,
+    SESS: Session + Unpin,
+    S: AsyncRead + AsyncWrite + Unpin,
 {
     fn poll_write(self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>> {
         let this = self.get_mut();
 
-        let mut io = AsyncRWSyncWrapper::new(&mut this.io, cx);
+        let mut sync_stream = AsyncRWSyncWrapper::new(&mut this.inner.stream, cx);
 
-        let mut stream = Stream::new(&mut this.session, &mut io);
+        let mut rustls_stream = Stream::new(&mut this.inner.session, &mut sync_stream);
 
-        match stream.write(buf) {
+        match rustls_stream.write(buf) {
             Ok(n) => Poll::Ready(Ok(n)),
             Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => Poll::Pending,
             Err(err) => Poll::Ready(Err(err)),
@@ -133,18 +160,18 @@ where
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
         let this = self.get_mut();
 
-        let mut io = AsyncRWSyncWrapper::new(&mut this.io, cx);
+        let mut sync_stream = AsyncRWSyncWrapper::new(&mut this.inner.stream, cx);
 
-        let mut stream = Stream::new(&mut this.session, &mut io);
+        let mut rustls_stream = Stream::new(&mut this.inner.session, &mut sync_stream);
 
-        stream.flush()?;
+        rustls_stream.flush()?;
 
-        Pin::new(&mut this.io).poll_flush(cx)
+        Pin::new(&mut this.inner.stream).poll_flush(cx)
     }
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
         let this = self.get_mut();
 
-        Pin::new(&mut this.io).poll_close(cx)
+        Pin::new(&mut this.inner.stream).poll_close(cx)
     }
 }
